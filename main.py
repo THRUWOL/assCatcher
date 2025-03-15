@@ -13,6 +13,15 @@ if not os.path.exists("data.json"):
 # Раздаём статику из папки static
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+@app.get("/", include_in_schema=False)
+@app.head("/", include_in_schema=False)
+async def read_root():
+    """
+    Обрабатывает GET и HEAD запросы на корневой URL.
+    """
+    return {"message": "Сервер работает! Открывай /static/index.html"}
+
+
 
 @app.post("/auth")
 async def auth(request: Request):
