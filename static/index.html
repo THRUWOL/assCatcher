@@ -142,7 +142,7 @@
     gameDiv.innerHTML += "<h2>Рейтинг:</h2>";
     const rating = data.players.sort((a, b) => b.wins - a.wins);
     rating.forEach(player => {
-        const avatarUrl = `https://api.multiavatar.com/${player.username}.png`; // Генерируем аватарку через Multiavatar
+        const avatarUrl = `https://robohash.org/${player.username}.png`; // Генерируем аватарку через Robohash
 
         gameDiv.innerHTML += `
             <div class="player ${player.has_jopka ? 'winner' : ''}">
