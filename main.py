@@ -1,17 +1,36 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.staticfiles import StaticFiles
-import json
-import os
 import random
+
+from fastapi import FastAPI, HTTPException
+from sqlalchemy import create_engine, Column, Integer, String, Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from pydantic import BaseModel
+import os
+
 app = FastAPI()
 
-# Создаем файл data.json, если его нет
-if not os.path.exists("data.json"):
-    with open("data.json", "w") as f:
-        json.dump({"players": [], "game_state": {"jopka_owner": None}}, f)
+DATABASE_URL = os.getenv("DATABASE_URL")
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-# Раздаём статику из папки static
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Модель игрока
+class Player(Base):
+    __tablename__ = "players"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    has_jopka = Column(Boolean, default=False)
+    wins = Column(Integer, default=0)
+
+# Создание таблиц
+Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 @app.get("/", include_in_schema=False)
 @app.head("/", include_in_schema=False)
@@ -24,112 +43,70 @@ async def read_root():
 
 
 @app.post("/auth")
-async def auth(request: Request):
-    """
-    Обрабатывает данные авторизации из Telegram Mini App.
-    """
-    try:
-        # Получаем данные пользователя
-        user_data = await request.json()
-        print("Полученные данные:", user_data)  # Логируем данные
+async def auth(player_data: dict):
+    db = next(get_db())
+    existing_player = db.query(Player).filter(Player.id == player_data["id"]).first()
+    if existing_player:
+        return {"message": "Вы уже зарегистрированы!"}
 
-        # Сохраняем пользователя в игру
-        with open("data.json", "r+") as f:
-            data = json.load(f)
-            # Проверяем, существует ли игрок уже
-            if any(p["id"] == user_data["id"] for p in data["players"]):
-                return #{"message": "Вы уже зарегистрированы!"}
+    new_player = Player(
+        id=player_data["id"],
+        username=player_data["username"],
+        has_jopka=False,
+        wins=0
+    )
+    db.add(new_player)
+    db.commit()
+    db.refresh(new_player)
 
-            # Добавляем нового игрока
-            new_player = {
-                "id": user_data["id"],
-                "username": user_data["username"],
-                "has_jopka": False,
-                "wins": 0,
-                "photo_url": user_data.get("photo_url")
-            }
-            data["players"].append(new_player)
-            # Если это первый игрок, он получает "Жопку КАЛа"
-            if len(data["players"]) == 1:
-                new_player["has_jopka"] = True
-                data["game_state"]["jopka_owner"] = user_data["id"]
-            f.seek(0)
-            json.dump(data, f, indent=4)
-            f.truncate()
+    # Если это первый игрок, он получает "Жопку КАЛа"
+    if db.query(Player).count() == 1:
+        new_player.has_jopka = True
+        db.commit()
 
-        return #{"message": "Игрок добавлен!"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return {"message": "Игрок добавлен!"}
 
 
 @app.get("/game_state")
 async def get_game_state():
-    """
-    Возвращает текущее состояние игры.
-    """
-    try:
-        with open("data.json", "r") as f:
-            data = json.load(f)
-        return data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка при чтении данных: {str(e)}")
+    db = next(get_db())
+    players = db.query(Player).all()
+    game_state = {
+        "players": [
+            {
+                "id": player.id,
+                "username": player.username,
+                "has_jopka": player.has_jopka,
+                "wins": player.wins
+            } for player in players
+        ],
+        "jopka_owner": next((p.id for p in players if p.has_jopka), None)
+    }
+    return game_state
 
 
 @app.post("/auto_challenge/{challenger_id}")
-async def auto_challenge(challenger_id: str):
-    """
-    Обрабатывает вызов владельцу "Жопки КАЛа".
-    """
-    print(f"Получен запрос на вызов от игрока {challenger_id}")  # Логируем запрос
+async def auto_challenge(challenger_id: int):
+    db = next(get_db())
+    challenger = db.query(Player).filter(Player.id == challenger_id).first()
+    jopka_owner = db.query(Player).filter(Player.has_jopka == True).first()
 
-    try:
-        with open("data.json", "r+") as f:
-            data = json.load(f)
-            print("Текущие данные игры:", data)  # Логируем данные из файла
+    if not challenger or not jopka_owner:
+        raise HTTPException(status_code=400, detail="Ошибка в данных игрока")
 
-            # Проверяем, есть ли игроки в игре
-            challenger = next((p for p in data["players"] if str(p["id"]) == challenger_id), None)
-            if not challenger:
-                raise HTTPException(status_code=400, detail="Игрок не найден")
+    if challenger.id == jopka_owner.id:
+        raise HTTPException(status_code=400, detail="Вы уже владеете 'Жопкой КАЛа'")
 
-            jopka_owner_id = data["game_state"]["jopka_owner"]
-            if not jopka_owner_id:
-                raise HTTPException(status_code=400, detail="Владелец 'Жопки КАЛа' не определён")
+    success = random.random() < 0.5
+    if success:
+        challenger.has_jopka = True
+        jopka_owner.has_jopka = False
+        challenger.wins += 1
+    else:
+        jopka_owner.wins += 1
 
-            opponent = next((p for p in data["players"] if str(p["id"]) == str(jopka_owner_id)), None)
-            if not opponent:
-                raise HTTPException(status_code=400, detail="Владелец 'Жопки КАЛа' не найден")
-            if not opponent["has_jopka"]:
-                raise HTTPException(status_code=400, detail="У противника нет 'Жопки КАЛа'")
-
-            # Проверяем, что вызывающий игрок не является владельцем "Жопки КАЛа"
-            if str(challenger_id) == str(jopka_owner_id):
-                raise HTTPException(status_code=400, detail="Вы уже владеете 'Жопкой КАЛа' и не можете бросить вызов самому себе")
-
-            # Рандомный шанс отобрать "Жопку КАЛа"
-            success = random.random() < 0.5
-            if success:
-                # Успех
-                challenger["has_jopka"] = True
-                opponent["has_jopka"] = False
-                data["game_state"]["jopka_owner"] = int(challenger_id)  # Сохраняем ID как число
-                challenger["wins"] += 1
-                message = "Вы завладели 'Жопкой КАЛа'!"
-            else:
-                # Неудача
-                opponent["wins"] += 1
-                message = "Вы не смогли завладеть 'Жопкой КАЛа'. Владелец получает победное очко!"
-
-            # Сохраняем обновлённые данные
-            f.seek(0)
-            json.dump(data, f, indent=4)
-            f.truncate()
-
-        return {"message": message, "success": success}
-
-    except Exception as e:
-        print(f"Ошибка: {str(e)}")  # Логируем ошибку
-        raise HTTPException(status_code=500, detail=f"Ошибка при обработке вызова: {str(e)}")
+    db.commit()
+    return {"message": "Вызов выполнен", "success": success}
 
 @app.get("/")
 async def read_root():
