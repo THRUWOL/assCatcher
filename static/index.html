@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Жопка КАЛа</title>
+    <style>
+
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin-top: 50px;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+        h1 {
+            color: #5c67f2;
+        }
+        .player {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 10px;
+            padding: 10px;
+            border-radius: 10px;
+            background-color: #fff;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s ease;
+        }
+        .player:hover {
+            transform: scale(1.05);
+        }
+        .player img {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 3px solid transparent;
+        }
+        .player.winner img {
+            border-color: #4caf50; /* Зелёная рамка для владельца "Жопки КАЛа" */
+        }
+        .player-name {
+            margin-top: 10px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .player-wins {
+            font-size: 14px;
+            color: #666;
+        }
+        #game {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 18px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        button:not([disabled]) {
+            background-color: #4caf50;
+            color: white;
+        }
+        button[disabled] {
+            background-color: #ccc;
+            color: #666;
+            cursor: not-allowed;
+        }
+        button:hover:not([disabled]) {
+            background-color: #45a049;
+        }
+        #login {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Игра "Жопка КАЛа"</h1>
+
+    <!-- Кнопка входа через Telegram (скрыта, если пользователь уже вошёл) -->
+    <div id="login">
+        <button onclick="initTelegramAuth()">Войти через Telegram</button>
+    </div>
+
+    <div id="game"></div>
+
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>
+        const API_URL = "https://ceaa-88-135-115-145.ngrok-free.app";
+
+        // Инициализация Telegram WebApp
+        const tg = window.Telegram.WebApp;
+        let currentUser = null;
+
+        // Функция для отправки данных пользователя на сервер
+        async function sendUserDataToServer(userData) {
+            try {
+                const response = await fetch(`${API_URL}/auth`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify(userData),
+                });
+
+                if (!response.ok) {
+                    throw new Error("Ошибка при регистрации игрока");
+                }
+
+                const data = await response.json();
+                alert(data.message);
+                fetchGameState();
+            } catch (error) {
+                console.error("Ошибка:", error);
+            }
+        }
+
+        // Функция для получения состояния игры
+        async function fetchGameState() {
+            const response = await fetch(`${API_URL}/game_state`);
+            const data = await response.json();
+            renderGame(data);
+        }
+
+        // Функция для периодического опроса состояния игры
+        async function pollGameState() {
+            setInterval(async () => {
+                await fetchGameState();
+            }, 5000); // Опрос каждые 5 секунд
+        }
+
+        function renderGame(data) {
+            const gameDiv = document.getElementById("game");
+            gameDiv.innerHTML = "";
+
+            // Показываем рейтинг
+            gameDiv.innerHTML += "<h2>Рейтинг:</h2>";
+            const rating = data.players.sort((a, b) => b.wins - a.wins);
+            rating.forEach(player => {
+                gameDiv.innerHTML += `
+                    <div class="player ${player.has_jopka ? 'winner' : ''}">
+                        <img src="${player.photo_url || 'https://via.placeholder.com/80'}" alt="${player.username}">
+                        <div class="player-name">${player.username}</div>
+                        <div class="player-wins">Побед: ${player.wins}</div>
+                    </div>
+                `;
+            });
+
+            // Показываем владельца "Жопки КАЛа"
+            // const jopkaOwner = data.players.find(p => p.id === data.game_state.jopka_owner);
+            // gameDiv.innerHTML += `<h2>Владелец "Жопки КАЛа": ${jopkaOwner?.username || "Никто"}</h2>`;
+
+            // Добавляем кнопку для броска вызова
+            if (currentUser && data.players.length > 1) {
+                const isDisabled = currentUser.id === data.game_state.jopka_owner;
+
+                gameDiv.innerHTML += `
+                    <button
+                        onclick="${!isDisabled ? 'challenge()' : ''}"
+                        ${isDisabled ? 'disabled' : ''}
+                    >
+                        ${isDisabled ? 'У вас уже есть жопка!' : 'Бросить вызов!'}
+                    </button>
+                `;
+            }
+        }
+
+        async function challenge() {
+            const response = await fetch(`${API_URL}/auto_challenge/${currentUser.id}`, { method: "POST" });
+            if (!response.ok) {
+                const errorData = await response.json();
+                alert(`Ошибка: ${errorData.detail}`);
+                return;
+            }
+            const result = await response.json();
+            alert(result.message);
+            fetchGameState(); // Обновляем интерфейс после вызова
+        }
+
+        // Инициализация приложения
+        function initTelegramAuth() {
+            tg.ready(); // Уведомляем Telegram, что приложение готово
+
+            // Получаем данные пользователя из Telegram WebApp
+            const userData = {
+                id: String(tg.initDataUnsafe.user.id), // Приводим ID к строке
+                username: tg.initDataUnsafe.user.username || `${tg.initDataUnsafe.user.first_name} ${tg.initDataUnsafe.user.last_name || ""}`,
+                photo_url: tg.initDataUnsafe.user.photo_url || null,
+            };
+
+            // Сохраняем текущего пользователя
+            currentUser = userData;
+
+            // Отправляем данные на сервер
+            sendUserDataToServer(userData);
+
+            // Скрываем кнопку входа
+            document.getElementById("login").style.display = "none";
+
+            // Запускаем опрос состояния игры
+            pollGameState();
+        }
+
+        // Проверяем, есть ли данные пользователя
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            initTelegramAuth();
+        } else {
+            // Если пользователь не авторизован, показываем кнопку входа
+            document.getElementById("login").style.display = "block";
+        }
+
+        // Загружаем состояние игры
+        fetchGameState();
+    </script>
+</body>
+</html>
